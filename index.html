@@ -15,31 +15,40 @@
             align-items: center;
         }
         .controls {
-            margin-bottom: 15px;
+            margin-bottom: 10px;
             display: flex;
             gap: 10px;
             width: 100%;
             max-width: 800px;
+            flex-wrap: wrap;
         }
-        input[type="text"] {
+        input[type="text"], select {
             flex: 1;
             padding: 12px;
-            font-size: 16px;
+            font-size: 15px;
             border: 2px solid #ccc;
             border-radius: 6px;
+            min-width: 250px;
         }
         button {
-            padding: 12px 20px;
-            font-size: 16px;
+            padding: 12px 18px;
+            font-size: 15px;
             font-weight: bold;
             background-color: #007bff;
             color: white;
             border: none;
             border-radius: 6px;
             cursor: pointer;
+            transition: background-color 0.2s;
         }
         button:hover {
             background-color: #0056b3;
+        }
+        button.btn-share {
+            background-color: #28a745;
+        }
+        button.btn-share:hover {
+            background-color: #218838;
         }
         #player-container {
             position: relative;
@@ -49,13 +58,13 @@
             border-radius: 8px;
             overflow: hidden;
             box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+            margin-top: 10px;
         }
         #player {
             width: 100%;
             height: 100%;
             pointer-events: none; /* 防止 iframe 攔截滑鼠事件 */
         }
-        /* 透明覆蓋層：專門捕捉眼動儀鼠標位置 */
         #overlay {
             position: absolute;
             top: 0;
@@ -68,7 +77,7 @@
         }
         #status {
             margin-top: 15px;
-            font-size: 20px;
+            font-size: 18px;
             font-weight: bold;
             padding: 10px 20px;
             border-radius: 6px;
@@ -87,12 +96,19 @@
 
     <div class="controls">
         <input type="text" id="youtubeUrl" placeholder="貼上 YouTube 網址或 11 位數影片 ID (例如：dQw4w9WgXcQ)">
-        <button onclick="loadVideo()">載入影片</button>
+        <button onclick="loadVideoFromInput()">載入影片</button>
+        <button onclick="copyShareableLink()" class="btn-share">複製此影片專屬連結</button>
+    </div>
+
+    <!-- 歷史播放紀錄快速選擇 -->
+    <div class="controls">
+        <select id="historySelect" onchange="loadFromHistory(this.value)">
+            <option value="">-- 快速選擇最近播放過的影片 --</option>
+        </select>
     </div>
 
     <div id="player-container">
         <div id="player"></div>
-        <!-- 捕捉視線進入/離開的透明層 -->
         <div id="overlay"></div>
     </div>
 
@@ -102,11 +118,22 @@
         let player;
         let awayTimer = null;
         let apiReady = false;
+        let currentVideoId = 'dQw4w9WgXcQ'; // 預設影片
         
-        // 眨眼/離開緩衝時間（毫秒）：移開視線超過 0.6 秒才暫停，避免眨眼卡頓
-        const AWAY_THRESHOLD = 600; 
+        const AWAY_THRESHOLD = 600; // 0.6 秒緩衝
 
-        // 1. 初始化 YouTube API
+        // 1. 解析網址帶入的參數 (Query Parameters)
+        function getInitialVideoId() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const param = urlParams.get('v') || urlParams.get('url');
+            if (param) {
+                const extracted = extractVideoId(param);
+                if (extracted) return extracted;
+            }
+            return 'dQw4w9WgXcQ'; // 若無參數則載入預設影片
+        }
+
+        // 2. 初始化 YouTube API
         const tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
         const firstScriptTag = document.getElementsByTagName('script')[0];
@@ -114,19 +141,26 @@
 
         function onYouTubeIframeAPIReady() {
             apiReady = true;
+            currentVideoId = getInitialVideoId();
+
             player = new YT.Player('player', {
                 height: '450',
                 width: '800',
-                videoId: 'dQw4w9WgXcQ', // 預設影片
+                videoId: currentVideoId,
                 playerVars: {
-                    'controls': 0,        // 隱藏控制列，避免訓練中干擾
+                    'controls': 0,
                     'modestbranding': 1,
                     'rel': 0
+                },
+                events: {
+                    'onReady': () => {
+                        updateHistoryUI();
+                    }
                 }
             });
         }
 
-        // 解析影片 ID
+        // 解析 11 位數 Video ID
         function extractVideoId(url) {
             if (!url) return null;
             url = url.trim();
@@ -137,30 +171,83 @@
             return (match && match[2].length === 11) ? match[2] : null;
         }
 
-        // 載入新影片
-        function loadVideo() {
-            const input = document.getElementById('youtubeUrl').value;
-            const videoId = extractVideoId(input);
-            
+        // 切換影片邏輯
+        function switchVideo(videoId, saveToHistory = true) {
             if (!apiReady || !player || typeof player.loadVideoById !== 'function') {
                 alert('播放器載入中，請稍候 2 秒再試！');
                 return;
             }
 
             if (videoId) {
+                currentVideoId = videoId;
                 player.loadVideoById(videoId);
                 player.pauseVideo();
+                
+                // 更新瀏覽器網址列但不重新整理頁面
+                const newUrl = `${window.location.origin}${window.location.pathname}?v=${videoId}`;
+                window.history.replaceState({ path: newUrl }, '', newUrl);
+
+                if (saveToHistory) {
+                    saveVideoToStorage(videoId);
+                }
+
                 updateStatus("已成功載入新影片！請將視線移入影片框內。", "status-ready");
             } else {
-                alert('無法辨識網址，請確認輸入的是有效的 YouTube 連結。');
+                alert('無法辨識網址，請確認輸入的是有效的 YouTube 連結或 11 位數 ID。');
             }
         }
 
-        // 2. 鼠標/視線進入與離開監聽
+        function loadVideoFromInput() {
+            const input = document.getElementById('youtubeUrl').value;
+            const videoId = extractVideoId(input);
+            switchVideo(videoId);
+        }
+
+        function loadFromHistory(videoId) {
+            if (videoId) {
+                document.getElementById('youtubeUrl').value = videoId;
+                switchVideo(videoId, false);
+            }
+        }
+
+        // 3. 複製分享連結
+        function copyShareableLink() {
+            const shareUrl = `${window.location.origin}${window.location.pathname}?v=${currentVideoId}`;
+            navigator.clipboard.writeText(shareUrl).then(() => {
+                alert(`已複製專屬連結！您可以直接將此網址加入書籤或發送給學生：\n\n${shareUrl}`);
+            }).catch(err => {
+                alert(`複製失敗，請直接複製瀏覽器網址列的連結。`);
+            });
+        }
+
+        // 4. LocalStorage 歷史紀錄維護
+        function saveVideoToStorage(videoId) {
+            let history = JSON.parse(localStorage.getItem('eye_tracking_history') || '[]');
+            // 避免重複加入
+            history = history.filter(id => id !== videoId);
+            history.unshift(videoId); // 加到最前面
+            if (history.length > 10) history = history.slice(0, 10); // 只保留最近 10 筆
+            localStorage.setItem('eye_tracking_history', JSON.stringify(history));
+            updateHistoryUI();
+        }
+
+        function updateHistoryUI() {
+            const history = JSON.parse(localStorage.getItem('eye_tracking_history') || '[]');
+            const select = document.getElementById('historySelect');
+            select.innerHTML = '<option value="">-- 快速選擇最近播放過的影片 --</option>';
+            
+            history.forEach((id, index) => {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.innerText = `歷史紀錄 ${index + 1}：影片 ID [ ${id} ]`;
+                select.appendChild(opt);
+            });
+        }
+
+        // 5. 鼠標/視線進入與離開監聽
         const overlay = document.getElementById('overlay');
 
         overlay.addEventListener('mouseenter', () => {
-            // 視線進入框內
             if (awayTimer) {
                 clearTimeout(awayTimer);
                 awayTimer = null;
@@ -170,7 +257,6 @@
             if (player && typeof player.playVideo === 'function') {
                 player.unMute();
                 player.playVideo().catch(() => {
-                    // 若受瀏覽器限制則靜音播放
                     player.mute();
                     player.playVideo();
                 });
@@ -178,7 +264,6 @@
         });
 
         overlay.addEventListener('mouseleave', () => {
-            // 視線離開框內（啟動延遲緩衝）
             if (!awayTimer) {
                 awayTimer = setTimeout(() => {
                     updateStatus("狀態：視線離開（暫停）", "status-away");
