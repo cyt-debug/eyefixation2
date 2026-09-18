@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>眼動儀訓練播放器 (鼠標模式)</title>
+    <style>
+        body {
+            font-family: "Microsoft JhengHei", Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .controls {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 10px;
+            width: 100%;
+            max-width: 800px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 12px;
+            font-size: 16px;
+            border: 2px solid #ccc;
+            border-radius: 6px;
+        }
+        button {
+            padding: 12px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #player-container {
+            position: relative;
+            width: 800px;
+            height: 450px;
+            background-color: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+        }
+        #player {
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* 防止 iframe 攔截滑鼠事件 */
+        }
+        /* 透明覆蓋層：專門捕捉眼動儀鼠標位置 */
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0); 
+            cursor: pointer;
+        }
+        #status {
+            margin-top: 15px;
+            font-size: 20px;
+            font-weight: bold;
+            padding: 10px 20px;
+            border-radius: 6px;
+            text-align: center;
+            width: 100%;
+            max-width: 760px;
+        }
+        .status-ready { color: #555; background-color: #e0e0e0; }
+        .status-looking { color: #2e7d32; background-color: #e8f5e9; }
+        .status-away { color: #c62828; background-color: #ffebee; }
+    </style>
+</head>
+<body>
+
+    <h1>眼動儀注視訓練系統</h1>
+
+    <div class="controls">
+        <input type="text" id="youtubeUrl" placeholder="貼上 YouTube 網址或 11 位數影片 ID (例如：dQw4w9WgXcQ)">
+        <button onclick="loadVideo()">載入影片</button>
+    </div>
+
+    <div id="player-container">
+        <div id="player"></div>
+        <!-- 捕捉視線進入/離開的透明層 -->
+        <div id="overlay"></div>
+    </div>
+
+    <div id="status" class="status-ready">狀態：請將眼動儀視線（鼠標）移入影片框內開始播放</div>
+
+    <script>
+        let player;
+        let awayTimer = null;
+        let apiReady = false;
+        
+        // 眨眼/離開緩衝時間（毫秒）：移開視線超過 0.6 秒才暫停，避免眨眼卡頓
+        const AWAY_THRESHOLD = 600; 
+
+        // 1. 初始化 YouTube API
+        const tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        const firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+        function onYouTubeIframeAPIReady() {
+            apiReady = true;
+            player = new YT.Player('player', {
+                height: '450',
+                width: '800',
+                videoId: 'dQw4w9WgXcQ', // 預設影片
+                playerVars: {
+                    'controls': 0,        // 隱藏控制列，避免訓練中干擾
+                    'modestbranding': 1,
+                    'rel': 0
+                }
+            });
+        }
+
+        // 解析影片 ID
+        function extractVideoId(url) {
+            if (!url) return null;
+            url = url.trim();
+            if (url.length === 11 && !url.includes('/') && !url.includes('.')) return url;
+            
+            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+            const match = url.match(regExp);
+            return (match && match[2].length === 11) ? match[2] : null;
+        }
+
+        // 載入新影片
+        function loadVideo() {
+            const input = document.getElementById('youtubeUrl').value;
+            const videoId = extractVideoId(input);
+            
+            if (!apiReady || !player || typeof player.loadVideoById !== 'function') {
+                alert('播放器載入中，請稍候 2 秒再試！');
+                return;
+            }
+
+            if (videoId) {
+                player.loadVideoById(videoId);
+                player.pauseVideo();
+                updateStatus("已成功載入新影片！請將視線移入影片框內。", "status-ready");
+            } else {
+                alert('無法辨識網址，請確認輸入的是有效的 YouTube 連結。');
+            }
+        }
+
+        // 2. 鼠標/視線進入與離開監聽
+        const overlay = document.getElementById('overlay');
+
+        overlay.addEventListener('mouseenter', () => {
+            // 視線進入框內
+            if (awayTimer) {
+                clearTimeout(awayTimer);
+                awayTimer = null;
+            }
+            updateStatus("狀態：注視影片中（播放）", "status-looking");
+
+            if (player && typeof player.playVideo === 'function') {
+                player.unMute();
+                player.playVideo().catch(() => {
+                    // 若受瀏覽器限制則靜音播放
+                    player.mute();
+                    player.playVideo();
+                });
+            }
+        });
+
+        overlay.addEventListener('mouseleave', () => {
+            // 視線離開框內（啟動延遲緩衝）
+            if (!awayTimer) {
+                awayTimer = setTimeout(() => {
+                    updateStatus("狀態：視線離開（暫停）", "status-away");
+                    if (player && typeof player.pauseVideo === 'function') {
+                        player.pauseVideo();
+                    }
+                }, AWAY_THRESHOLD);
+            }
+        });
+
+        function updateStatus(text, className) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerText = text;
+            statusDiv.className = className;
+        }
+    </script>
+</body>
+</html>
